@@ -1,9 +1,9 @@
 import random
 import time
-from config import BOARD_ROWS, BOARD_COLS
-from core.board import Board, Piece, CellType
-from core.player import Player, PieceType, PIECE_NAMES, PIECE_RANK, PIECE_COUNT, TOTAL_PIECES_PER_SIDE
 
+from config import BOARD_ROWS, BOARD_COLS
+from core.board import Piece, CellType
+from core.player import Player, PieceType, PIECE_RANK
 
 PIECE_VALUES = {
     PieceType.FLAG: 10000,
@@ -172,7 +172,7 @@ class MilitaryChessAI:
 
         base_layout = {
             PieceType.FLAG: [(12, 1)],
-            PieceType.COMMANDER: [(12, 3)],
+            PieceType.COMMANDER: [(12, 4)],
             PieceType.MINE: [(11, 1), (12, 0), (12, 2)],
             PieceType.BOMB: [(11, 2), (9, 1)],
             PieceType.ARMY: [(9, 3)],
@@ -182,7 +182,7 @@ class MilitaryChessAI:
             PieceType.BATTALION: [(7, 2), (11, 3)],
             PieceType.ENGINEER: [(7, 0), (7, 4), (9, 0)],
             PieceType.COMPANY: [(7, 1), (9, 4), (11, 0)],
-            PieceType.PLATOON: [(7, 3), (11, 4), (12, 4)],
+            PieceType.PLATOON: [(7, 3), (11, 4), (12, 3)],
         }
 
         for pt, positions in base_layout.items():
@@ -454,7 +454,10 @@ class MilitaryChessAI:
         movable = board.get_movable_pieces(player)
         for r, c, moves in movable:
             attacker = board.get_piece(r, c)
-            atk_val = PIECE_VALUES.get(attacker.piece_type, 0) if attacker else 0
+            if attacker is None:
+                continue
+            atk_val = PIECE_VALUES.get(attacker.piece_type, 0)
+            atk_rank = PIECE_RANK.get(attacker.piece_type, 0)
             for to_r, to_c in moves:
                 target = board.get_piece(to_r, to_c)
                 if target is not None and target.owner == opponent:
@@ -462,7 +465,14 @@ class MilitaryChessAI:
                         score = 1000000
                     else:
                         def_val = PIECE_VALUES.get(target.piece_type, 0)
-                        score = def_val * 10 - atk_val
+                        def_rank = PIECE_RANK.get(target.piece_type, 0)
+                        result = board.resolve_battle(attacker, target)
+                        if result == "attacker":
+                            score = def_val * 10 - atk_val
+                        elif result == "both":
+                            score = def_val - atk_val
+                        else:
+                            continue
                     captures.append((score, r, c, to_r, to_c))
         return captures
 
@@ -481,9 +491,15 @@ class MilitaryChessAI:
             attacker = board.get_piece(from_r, from_c)
             if target.piece_type == PieceType.FLAG:
                 return 150000
+            result = board.resolve_battle(attacker, target)
             mvv = PIECE_VALUES.get(target.piece_type, 0)
             lva = PIECE_VALUES.get(attacker.piece_type, 0) if attacker else 0
-            return 40000 + mvv * 10 - lva
+            if result == "attacker":
+                return 40000 + mvv * 10 - lva
+            elif result == "both":
+                return 20000 + mvv - lva
+            else:
+                return -mvv * 5
 
         hist = self._history.get(move, 0)
         if hist > 0:
@@ -586,7 +602,8 @@ class MilitaryChessAI:
                     continue
                 dist = abs(r - fr) + abs(c - fc)
                 if dist <= 4:
-                    score += FLAG_ATTACK_BONUS * (5 - dist)
+                    val = PIECE_VALUES.get(p.piece_type, 0)
+                    score += int(val * 0.08) * (5 - dist)
         return score
 
     def _evaluate(self, board, ai_player):
@@ -615,6 +632,7 @@ class MilitaryChessAI:
         my_commander_alive = False
         opp_commander_alive = False
         my_commander_exposed = False
+        my_commander_pos = None
         opp_commander_exposed = False
         my_engineer_count = 0
         opp_engineer_count = 0
@@ -638,6 +656,7 @@ class MilitaryChessAI:
                         my_flag_pos = (r, c)
                     elif p.piece_type == PieceType.COMMANDER:
                         my_commander_alive = True
+                        my_commander_pos = (r, c)
                         if ct != CellType.HQ:
                             my_commander_exposed = True
                     elif p.piece_type == PieceType.ENGINEER:
@@ -698,7 +717,8 @@ class MilitaryChessAI:
                 if board.is_valid_position(nr, nc):
                     p = board.get_piece(nr, nc)
                     if p is not None and p.owner == ai_player and p.piece_type != PieceType.FLAG:
-                        protect_score += FLAG_PROTECTION_BONUS
+                        val = PIECE_VALUES.get(p.piece_type, 0)
+                        protect_score += int(val * 0.15)
                     if p is not None and p.owner == opponent:
                         protect_score -= 60
             my_value += protect_score
@@ -709,7 +729,14 @@ class MilitaryChessAI:
         elif not my_commander_alive and opp_commander_alive:
             commander_score -= COMMANDER_SAFETY_BONUS * 2
         if my_commander_exposed:
-            commander_score -= COMMANDER_EXPOSED_PENALTY
+            if my_commander_pos is not None and my_flag_pos is not None:
+                dist_to_flag = abs(my_commander_pos[0] - my_flag_pos[0]) + abs(my_commander_pos[1] - my_flag_pos[1])
+                if dist_to_flag <= 2:
+                    commander_score -= COMMANDER_EXPOSED_PENALTY // 2
+                else:
+                    commander_score -= COMMANDER_EXPOSED_PENALTY
+            else:
+                commander_score -= COMMANDER_EXPOSED_PENALTY
         if opp_commander_exposed:
             commander_score += COMMANDER_EXPOSED_PENALTY
 
@@ -766,19 +793,27 @@ class MilitaryChessAI:
                     if known_target is not None:
                         score += 50
             elif result == "defender":
-                score -= PIECE_VALUES.get(piece.piece_type, 0)
-                if piece.piece_type in (PieceType.COMMANDER, PieceType.ARMY):
-                    score -= 250
+                my_loss = PIECE_VALUES.get(piece.piece_type, 0)
+                score -= my_loss * 4
+                if piece.piece_type in (PieceType.COMMANDER, PieceType.ARMY, PieceType.DIVISION):
+                    score -= 600
+                if piece.piece_type in (PieceType.BRIGADE, PieceType.REGIMENT):
+                    score -= 300
             elif result == "both":
                 attacker_val = PIECE_VALUES.get(piece.piece_type, 0)
                 defender_val = PIECE_VALUES.get(target.piece_type, 0)
                 if piece.piece_type == PieceType.BOMB:
                     if target.piece_type in (PieceType.COMMANDER, PieceType.ARMY, PieceType.DIVISION):
-                        score += 400
+                        score += 500
+                    elif target.piece_type in (PieceType.BRIGADE, PieceType.REGIMENT):
+                        score += defender_val - attacker_val + 100
                     else:
                         score += defender_val - attacker_val
                 else:
-                    score += defender_val - attacker_val
+                    if target.piece_type in (PieceType.COMMANDER, PieceType.ARMY, PieceType.DIVISION):
+                        score += defender_val - attacker_val + 200
+                    else:
+                        score += defender_val - attacker_val
         else:
             to_cell = board.get_cell_type(to_r, to_c)
             if to_cell == CellType.CAMP:
@@ -806,7 +841,7 @@ class MilitaryChessAI:
                     if p is not None and p.owner == opponent and p.piece_type == PieceType.MINE:
                         score += 180
 
-        threat_score = self._is_threatening_flag(board, player, to_r, to_c)
+        threat_score = self._is_threatening_flag(board, player, to_r, to_c, piece)
         if threat_score > 0:
             score += threat_score
 
@@ -814,12 +849,35 @@ class MilitaryChessAI:
             score -= 500
 
         if self._is_piece_in_danger(board, player, to_r, to_c, piece):
-            score -= 250
+            score -= 400
 
         if self._will_be_in_danger(board, player, opponent, from_r, from_c, to_r, to_c):
-            score -= 300
+            score -= 500
+
+        if target is not None and self._is_suicide_attack(board, player, from_r, from_c, to_r, to_c):
+            score -= 800
 
         return score
+
+    def _is_suicide_attack(self, board, player, from_r, from_c, to_r, to_c):
+        piece = board.get_piece(from_r, from_c)
+        target = board.get_piece(to_r, to_c)
+        if piece is None or target is None:
+            return False
+        if target.owner == player:
+            return False
+        atk_rank = PIECE_RANK.get(piece.piece_type, 0)
+        def_rank = PIECE_RANK.get(target.piece_type, 0)
+        if atk_rank == 0 or def_rank == 0:
+            return False
+        if atk_rank < def_rank:
+            if piece.piece_type != PieceType.BOMB:
+                return True
+        if piece.piece_type == PieceType.BOMB:
+            if target.piece_type not in (PieceType.COMMANDER, PieceType.ARMY, PieceType.DIVISION, PieceType.BRIGADE):
+                if def_rank <= atk_rank:
+                    return True
+        return False
 
     def _will_be_in_danger(self, board, player, opponent, from_r, from_c, to_r, to_c):
         piece = board.get_piece(from_r, from_c)
@@ -840,7 +898,7 @@ class MilitaryChessAI:
                     return True
         return False
 
-    def _is_threatening_flag(self, board, player, to_r, to_c):
+    def _is_threatening_flag(self, board, player, to_r, to_c, piece=None):
         opponent = Player.RED if player == Player.BLUE else Player.BLUE
         for r in range(BOARD_ROWS):
             for c in range(BOARD_COLS):
@@ -848,7 +906,12 @@ class MilitaryChessAI:
                 if p is not None and p.owner == opponent and p.piece_type == PieceType.FLAG:
                     distance = abs(to_r - r) + abs(to_c - c)
                     if distance <= 3:
-                        return 120 * (4 - distance)
+                        if piece is not None:
+                            val = PIECE_VALUES.get(piece.piece_type, 0)
+                            base = int(val * 0.15)
+                        else:
+                            base = 120
+                        return base * (4 - distance)
         return 0
 
     def _exposes_valuable_piece(self, board, player, from_r, from_c, to_r, to_c):

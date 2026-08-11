@@ -253,6 +253,12 @@ class Board:
             if self._is_no_stop_cell(nr, nc):
                 continue
             if self.cell_types[nr][nc] == CellType.HQ:
+                if self.grid[nr][nc] is not None:
+                    if self.grid[nr][nc].owner != owner:
+                        if self._can_target_be_attacked(nr, nc):
+                            moves.append((nr, nc))
+                else:
+                    moves.append((nr, nc))
                 continue
             if self.grid[nr][nc] is not None:
                 if self.grid[nr][nc].owner != owner:
