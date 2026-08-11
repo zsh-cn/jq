@@ -177,7 +177,7 @@ class Renderer:
             pygame.draw.rect(self.screen, HIGHLIGHT, (x, y, cw, ch), 3)
 
     def _draw_hover_indicator(self, bx, by, game_state):
-        if game_state.is_game_over:
+        if game_state.is_game_over or game_state.phase == "setup":
             return
         cw = self.cell_w
         ch = self.cell_h
