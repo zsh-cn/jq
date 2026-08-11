@@ -1,3 +1,5 @@
+from collections import deque
+
 from config import BOARD_ROWS, BOARD_COLS
 from core.player import Player, PieceType, PIECE_NAMES, PIECE_RANK
 
@@ -231,6 +233,10 @@ class Board:
                 moves = self._get_engineer_railway_moves(row, col, piece.owner)
             else:
                 moves = self._get_straight_railway_moves(row, col, piece.owner)
+            existing = set(moves)
+            for ar, ac in self._get_adjacent_moves(row, col, piece.owner):
+                if (ar, ac) not in existing:
+                    moves.append((ar, ac))
         else:
             moves = self._get_adjacent_moves(row, col, piece.owner)
 
@@ -245,6 +251,8 @@ class Board:
             if not self._are_orthogonally_connected(row, col, nr, nc):
                 continue
             if self._is_no_stop_cell(nr, nc):
+                continue
+            if self.cell_types[nr][nc] == CellType.HQ:
                 continue
             if self.grid[nr][nc] is not None:
                 if self.grid[nr][nc].owner != owner:
@@ -281,10 +289,10 @@ class Board:
         moves = []
         visited = set()
         visited.add((row, col))
-        queue = [(row, col)]
+        queue = deque([(row, col)])
 
         while queue:
-            cr, cc = queue.pop(0)
+            cr, cc = queue.popleft()
             current_on_rail = (self.cell_types[cr][cc] == CellType.RAILWAY)
             for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
                 nr, nc = cr + dr, cc + dc
@@ -294,6 +302,7 @@ class Board:
                     continue
                 if (nr, nc) in visited:
                     continue
+                visited.add((nr, nc))
                 if self._is_border_crossing(cr, cc, nr, nc):
                     continue
                 next_on_rail = (self.cell_types[nr][nc] == CellType.RAILWAY)
@@ -306,7 +315,6 @@ class Board:
                         if self._can_target_be_attacked(nr, nc) and not is_no_stop:
                             moves.append((nr, nc))
                     continue
-                visited.add((nr, nc))
                 if not is_no_stop:
                     moves.append((nr, nc))
                 if current_on_rail:

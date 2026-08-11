@@ -497,14 +497,21 @@ class MilitaryChessAI:
         if target is not None:
             result = board.resolve_battle(piece, target)
             if result == "attacker":
+                piece.visible = True
+                target.visible = True
                 board.remove_piece(to_r, to_c)
                 board.move_piece(from_r, from_c, to_r, to_c)
             elif result == "defender":
+                piece.visible = True
+                target.visible = True
                 board.remove_piece(from_r, from_c)
             elif result == "both":
+                piece.visible = True
+                target.visible = True
                 board.remove_piece(from_r, from_c)
                 board.remove_piece(to_r, to_c)
         else:
+            piece.visible = True
             board.move_piece(from_r, from_c, to_r, to_c)
 
     def _game_phase(self, total_pieces):
@@ -612,6 +619,7 @@ class MilitaryChessAI:
         my_engineer_count = 0
         opp_engineer_count = 0
         opp_mine_count = 0
+        my_mine_count = 0
         rail_control = 0
 
         for r in range(BOARD_ROWS):
@@ -634,6 +642,8 @@ class MilitaryChessAI:
                             my_commander_exposed = True
                     elif p.piece_type == PieceType.ENGINEER:
                         my_engineer_count += 1
+                    elif p.piece_type == PieceType.MINE:
+                        my_mine_count += 1
                     else:
                         if enemy_direction == 1:
                             advance_score += (my_back_row - r) * ADVANCE_WEIGHT
@@ -715,6 +725,8 @@ class MilitaryChessAI:
         if phase == "endgame":
             if my_engineer_count > 0 and opp_mine_count > 0:
                 total_score += my_engineer_count * ENGINEER_ENDGAME_VALUE
+            if my_mine_count > 0:
+                total_score += my_mine_count * 40
             if my_commander_alive and opp_commander_alive:
                 total_score += my_value * 0.05
             if my_engineer_count > opp_engineer_count:

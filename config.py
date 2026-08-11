@@ -38,7 +38,9 @@ USE_RESIZABLE = True
 
 def calc_window_size():
     try:
-        pygame.display.init()
+        was_initialized = pygame.get_init()
+        if not was_initialized:
+            pygame.display.init()
         screen_info = pygame.display.Info()
         sw = screen_info.current_w
         sh = screen_info.current_h
@@ -69,7 +71,8 @@ def calc_window_size():
         window_w = min(window_w, max_w)
         window_h = min(window_h, max_h)
 
-        pygame.display.quit()
+        if not was_initialized:
+            pygame.display.quit()
         return window_w, window_h, cell_w, cell_h
     except Exception:
         return 900, 850, BASE_CELL_WIDTH, BASE_CELL_HEIGHT

@@ -76,6 +76,9 @@ class MilitaryChessGame:
         self._my_setup_sent = False
         self._disconnected = False
         self._waiting_for_rematch = False
+        self._pending_game_start = None
+        self._pending_return = None
+        self._reset_pending = False
         self._ai_pending = False
         self._ai_computing = False
         self._ai_result = None
@@ -83,6 +86,7 @@ class MilitaryChessGame:
         self._ai_setup_done = False
         self._ai_delay = 0
         self._ai_anim_phase = 0
+        self._ai_generation = 0
         self.renderer.set_selected(None)
         self.renderer.set_valid_moves([])
 
@@ -962,7 +966,7 @@ class MilitaryChessGame:
 
     def _draw_ai_thinking(self):
         font = get_font(16)
-        dots = "." * (self._ai_anim_phase // 15 % 4)
+        dots = "." * (self._ai_anim_phase // 15 % 5)
         text = font.render(f"AI思考中{dots}", True, (255, 200, 100))
         x = self.screen.get_width() - 130
         y = 12
@@ -992,15 +996,20 @@ class MilitaryChessGame:
         self._draw()
         dialog = Dialog(self.screen, "与服务器断开连接!", "错误", [("返回菜单", True)])
         result = dialog.show()
-        self._pending_return = "menu"
+        if result is None or result is True:
+            self._pending_return = "menu"
+        elif result is False:
+            self._pending_return = "menu"
 
     def _show_opponent_left_dialog(self):
         self._draw()
         if not self.game_state.is_game_over:
             dialog = Dialog(self.screen, "对方已离开，你赢了!", "游戏结束", [("返回菜单", True)])
             result = dialog.show()
-            self._pending_return = "menu"
+            if result is None or result is True:
+                self._pending_return = "menu"
         else:
             dialog = Dialog(self.screen, "对方已离开", "提示", [("返回菜单", True)])
             result = dialog.show()
-            self._pending_return = "menu"
+            if result is None or result is True:
+                self._pending_return = "menu"
