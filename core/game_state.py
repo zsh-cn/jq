@@ -70,6 +70,9 @@ class GameState:
         if piece_type == PieceType.MINE and row not in back_rows:
             return False
 
+        if piece_type == PieceType.MINE and cell_type == CellType.HQ:
+            return False
+
         if piece_type == PieceType.FLAG:
             if cell_type != CellType.HQ:
                 return False
