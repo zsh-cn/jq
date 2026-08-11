@@ -1,7 +1,7 @@
 import pygame
 from config import *
 from core.player import Player, PieceType, PIECE_NAMES, TOTAL_PIECES_PER_SIDE
-from core.board import CellType
+from core.board import CellType, FRONT_LINE_ROW
 from utils.fonts import get_font
 from ui.menu import Button
 
@@ -111,6 +111,8 @@ class Renderer:
                     color = HQ_COLOR
                 elif ct == CellType.MOUNTAIN:
                     color = MOUNTAIN_COLOR
+                elif r == FRONT_LINE_ROW and ct == CellType.RAILWAY:
+                    color = (230, 200, 200)
                 else:
                     color = BOARD_BG
                 pygame.draw.rect(self.screen, color, (x, y, cw, ch))
@@ -140,6 +142,12 @@ class Renderer:
                     m_text = m_font.render("山界", True, (120, 90, 60))
                     tr = m_text.get_rect(center=(x + cw // 2, y + ch // 2))
                     self.screen.blit(m_text, tr)
+
+                if r == FRONT_LINE_ROW and ct == CellType.RAILWAY:
+                    fl_font = self.tiny_font
+                    fl_text = fl_font.render("前线", True, (200, 80, 80))
+                    tr = fl_text.get_rect(center=(x + cw // 2, y + ch // 2))
+                    self.screen.blit(fl_text, tr)
 
                 pygame.draw.rect(self.screen, LINE_COLOR, (x, y, cw, ch), 1)
 

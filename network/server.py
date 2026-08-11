@@ -1,7 +1,7 @@
 import socket
 import threading
 import random
-from network.protocol import send_message, receive_message, MESSAGE_TYPES
+from network.protocol import send_message, receive_message_from_socket, MESSAGE_TYPES, SocketLineReader
 
 
 class GomokuServer:
@@ -113,10 +113,10 @@ class GomokuServer:
             client_thread.start()
 
     def _handle_client(self, client_id, client_sock):
-        file_obj = client_sock.makefile("rb")
+        reader = SocketLineReader(client_sock)
         try:
             while self.running:
-                msg = receive_message(file_obj)
+                msg = receive_message_from_socket(reader)
                 if msg is None:
                     break
                 self._process_message(client_id, msg)
@@ -124,7 +124,7 @@ class GomokuServer:
             pass
         finally:
             try:
-                file_obj.close()
+                reader.close()
             except Exception:
                 pass
             self._remove_client(client_id)

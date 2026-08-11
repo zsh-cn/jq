@@ -22,6 +22,7 @@ class Piece:
         self.piece_type = piece_type
         self.owner = owner
         self.visible = True
+        self.locked = False
 
     @property
     def name(self):
@@ -82,6 +83,9 @@ class Board:
     def _is_mountain(self, r, c):
         return self.cell_types[r][c] == CellType.MOUNTAIN
 
+    def _is_no_stop_cell(self, r, c):
+        return r == FRONT_LINE_ROW and self.cell_types[r][c] == CellType.RAILWAY
+
     def _is_border_crossing(self, r1, c1, r2, c2):
         if (r1 == BORDER_ROW_TOP and r2 == BORDER_ROW_BOTTOM) or \
            (r1 == BORDER_ROW_BOTTOM and r2 == BORDER_ROW_TOP):
@@ -123,6 +127,7 @@ class Board:
                     p = self.grid[r][c]
                     new_piece = Piece(p.piece_type, p.owner)
                     new_piece.visible = p.visible
+                    new_piece.locked = p.locked
                     new_board.grid[r][c] = new_piece
         new_board.history = list(self.history)
         return new_board
@@ -153,6 +158,8 @@ class Board:
             return False
         self.grid[from_row][from_col] = None
         self.grid[to_row][to_col] = piece
+        if self.cell_types[to_row][to_col] == CellType.HQ:
+            piece.locked = True
         self.history.append((from_row, from_col, to_row, to_col, piece.piece_type, piece.owner))
         return True
 
@@ -195,6 +202,8 @@ class Board:
                 continue
             if p.piece_type == PieceType.MINE:
                 continue
+            if p.locked:
+                continue
             moves = self.get_valid_moves(r, c)
             if moves:
                 movable.append((r, c, moves))
@@ -207,6 +216,10 @@ class Board:
         if piece.piece_type == PieceType.FLAG:
             return []
         if piece.piece_type == PieceType.MINE:
+            return []
+        if piece.locked:
+            return []
+        if self.cell_types[row][col] == CellType.HQ:
             return []
 
         moves = []
@@ -231,6 +244,8 @@ class Board:
                 continue
             if not self._are_orthogonally_connected(row, col, nr, nc):
                 continue
+            if self._is_no_stop_cell(nr, nc):
+                continue
             if self.grid[nr][nc] is not None:
                 if self.grid[nr][nc].owner != owner:
                     if self._can_target_be_attacked(nr, nc):
@@ -248,14 +263,16 @@ class Board:
                     break
                 if self._is_border_crossing(cr - dr, cc - dc, cr, cc):
                     break
-                if self.grid[cr][cc] is not None:
-                    if self.grid[cr][cc].owner != owner:
-                        if self._can_target_be_attacked(cr, cc):
-                            moves.append((cr, cc))
-                    break
-                moves.append((cr, cc))
                 if self.cell_types[cr][cc] != CellType.RAILWAY:
                     break
+                is_no_stop = self._is_no_stop_cell(cr, cc)
+                if self.grid[cr][cc] is not None:
+                    if self.grid[cr][cc].owner != owner:
+                        if self._can_target_be_attacked(cr, cc) and not is_no_stop:
+                            moves.append((cr, cc))
+                    break
+                if not is_no_stop:
+                    moves.append((cr, cc))
                 cr += dr
                 cc += dc
         return moves
@@ -279,22 +296,22 @@ class Board:
                     continue
                 if self._is_border_crossing(cr, cc, nr, nc):
                     continue
-                target = self.grid[nr][nc]
                 next_on_rail = (self.cell_types[nr][nc] == CellType.RAILWAY)
+                if not next_on_rail:
+                    continue
+                target = self.grid[nr][nc]
+                is_no_stop = self._is_no_stop_cell(nr, nc)
                 if target is not None:
                     if target.owner != owner:
-                        if self._can_target_be_attacked(nr, nc):
+                        if self._can_target_be_attacked(nr, nc) and not is_no_stop:
                             moves.append((nr, nc))
                     continue
                 visited.add((nr, nc))
-                moves.append((nr, nc))
-                if current_on_rail and next_on_rail:
+                if not is_no_stop:
+                    moves.append((nr, nc))
+                if current_on_rail:
                     queue.append((nr, nc))
 
-        adjacent = self._get_adjacent_moves(row, col, owner)
-        for m in adjacent:
-            if m not in moves:
-                moves.append(m)
         return moves
 
     def resolve_battle(self, attacker_piece, defender_piece):

@@ -1,7 +1,7 @@
 import socket
 import threading
 import queue
-from network.protocol import send_message, receive_message, MESSAGE_TYPES
+from network.protocol import send_message, receive_message_from_socket, MESSAGE_TYPES, SocketLineReader
 
 
 class GomokuClient:
@@ -9,7 +9,7 @@ class GomokuClient:
         self.host = host
         self.port = port
         self.client_socket = None
-        self.file_obj = None
+        self.reader = None
         self.message_queue = queue.Queue()
         self.running = False
         self.player_id = 0
@@ -22,7 +22,7 @@ class GomokuClient:
             self.client_socket.settimeout(3.0)
             self.client_socket.connect((self.host, self.port))
             self.client_socket.settimeout(None)
-            self.file_obj = self.client_socket.makefile("rb")
+            self.reader = SocketLineReader(self.client_socket)
             self.is_connected = True
             self.running = True
             receive_thread = threading.Thread(target=self._receive_messages, daemon=True)
@@ -55,13 +55,13 @@ class GomokuClient:
             except OSError:
                 pass
         self.client_socket = None
-        self.file_obj = None
+        self.reader = None
         print("已断开连接")
 
     def _receive_messages(self):
         try:
             while self.running:
-                msg = receive_message(self.file_obj)
+                msg = receive_message_from_socket(self.reader)
                 if msg is None:
                     break
                 self.message_queue.put(msg)

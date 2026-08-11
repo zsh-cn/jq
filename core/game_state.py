@@ -35,11 +35,17 @@ class GameState:
                     p = self.board.grid[r][c]
                     if p is not None:
                         p.visible = True
+                        if self.board.cell_types[r][c] == CellType.HQ:
+                            p.locked = True
             return True
         return False
 
     def setup_place_piece(self, row, col, piece_type, player):
         if self.phase != "setup":
+            return False
+        if player == Player.RED and self.red_setup_done:
+            return False
+        if player == Player.BLUE and self.blue_setup_done:
             return False
         area_rows = self.board.get_player_area_rows(player)
         if row not in area_rows:
@@ -72,6 +78,10 @@ class GameState:
 
     def setup_remove_piece(self, row, col, player):
         if self.phase != "setup":
+            return False
+        if player == Player.RED and self.red_setup_done:
+            return False
+        if player == Player.BLUE and self.blue_setup_done:
             return False
         piece = self.board.get_piece(row, col)
         if piece is None or piece.owner != player:
@@ -152,7 +162,7 @@ class GameState:
             for c in range(BOARD_COLS):
                 p = self.board.grid[r][c]
                 if p is not None:
-                    grid_data.append((r, c, int(p.piece_type), int(p.owner)))
+                    grid_data.append((r, c, int(p.piece_type), int(p.owner), 1 if p.locked else 0))
         return {
             "grid": grid_data,
             "current_player": int(self.current_player),
@@ -165,8 +175,11 @@ class GameState:
 
     def load_state_dict(self, state):
         self.board.reset()
-        for r, c, pt, owner in state["grid"]:
+        for entry in state["grid"]:
+            r, c, pt, owner = entry[0], entry[1], entry[2], entry[3]
             piece = Piece(PieceType(pt), Player(owner))
+            if len(entry) > 4 and entry[4]:
+                piece.locked = True
             self.board.place_piece(r, c, piece)
         self.current_player = Player(state["current_player"])
         self.is_game_over = state["is_game_over"]

@@ -239,6 +239,11 @@ class MilitaryChessGame:
             if red_ready and blue_ready:
                 self.game_state.red_setup_done = True
                 self.game_state.blue_setup_done = True
+                self._selected_piece_type = None
+                self._selected_piece_player = None
+                self._selected_cell = None
+                self.renderer.set_selected(None)
+                self.renderer.set_valid_moves([])
                 self.game_state.start_game()
             return
 
@@ -247,6 +252,13 @@ class MilitaryChessGame:
                 self.game_state.red_setup_done = True
             else:
                 self.game_state.blue_setup_done = True
+
+            if self._selected_piece_player == self.my_player:
+                self._selected_piece_type = None
+                self._selected_piece_player = None
+                self._selected_cell = None
+                self.renderer.set_selected(None)
+                self.renderer.set_valid_moves([])
 
             if self.player_type == 3 and self._ai_setup_done:
                 self.game_state.start_game()
@@ -277,6 +289,13 @@ class MilitaryChessGame:
     def _auto_setup_self(self):
         if self.game_state.phase != "setup":
             return
+        if self.player_type == 0 and self.game_state.red_setup_done and self.game_state.blue_setup_done:
+            return
+        if self.player_type != 0 and self.my_player is not None:
+            if self.my_player == Player.RED and self.game_state.red_setup_done:
+                return
+            if self.my_player == Player.BLUE and self.game_state.blue_setup_done:
+                return
         if self._ai is None:
             self._ai = MilitaryChessAI()
         if self.player_type == 0:
@@ -527,6 +546,10 @@ class MilitaryChessGame:
                 if existing is not None:
                     if self.player_type != 0 and existing.owner != self.my_player:
                         return
+                    if existing.owner == Player.RED and self.game_state.red_setup_done:
+                        return
+                    if existing.owner == Player.BLUE and self.game_state.blue_setup_done:
+                        return
                     self.game_state.setup_remove_piece(cell[0], cell[1], existing.owner)
                     self._selected_cell = None
                     self._selected_piece_type = None
@@ -546,6 +569,10 @@ class MilitaryChessGame:
         if panel_pt is not None:
             if self.player_type != 0 and panel_player != self.my_player:
                 return
+            if panel_player == Player.RED and self.game_state.red_setup_done:
+                return
+            if panel_player == Player.BLUE and self.game_state.blue_setup_done:
+                return
             placed, remaining = self.game_state.get_setup_piece_counts(panel_player)
             if remaining.get(panel_pt, 0) > 0:
                 self._selected_piece_type = panel_pt
@@ -557,6 +584,10 @@ class MilitaryChessGame:
             r, c = cell
             if self._selected_piece_type is not None and self._selected_piece_player is not None:
                 if self.player_type != 0 and self._selected_piece_player != self.my_player:
+                    return
+                if self._selected_piece_player == Player.RED and self.game_state.red_setup_done:
+                    return
+                if self._selected_piece_player == Player.BLUE and self.game_state.blue_setup_done:
                     return
                 existing = self.game_state.board.get_piece(r, c)
                 if existing is not None and existing.owner == self._selected_piece_player:
@@ -572,6 +603,10 @@ class MilitaryChessGame:
                 existing = self.game_state.board.get_piece(r, c)
                 if existing is not None:
                     if self.player_type != 0 and existing.owner != self.my_player:
+                        return
+                    if existing.owner == Player.RED and self.game_state.red_setup_done:
+                        return
+                    if existing.owner == Player.BLUE and self.game_state.blue_setup_done:
                         return
                     self.game_state.setup_remove_piece(r, c, existing.owner)
                     self._selected_cell = None

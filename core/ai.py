@@ -1,6 +1,5 @@
 import random
 import time
-import math
 from config import BOARD_ROWS, BOARD_COLS
 from core.board import Board, Piece, CellType
 from core.player import Player, PieceType, PIECE_NAMES, PIECE_RANK, PIECE_COUNT, TOTAL_PIECES_PER_SIDE
@@ -39,8 +38,17 @@ COMMANDER_SAFETY_BONUS = 80
 FLAG_PROTECTION_BONUS = 40
 ENGINEER_MINE_BONUS = 120
 CAMP_BONUS = 30
+CAMP_STRONG_BONUS = 40
 MOBILITY_WEIGHT = 18
 ADVANCE_WEIGHT = 3
+RAIL_CONTROL_BONUS = 25
+COMMANDER_EXPOSED_PENALTY = 120
+ENGINEER_ENDGAME_VALUE = 80
+FLAG_ATTACK_BONUS = 60
+THREAT_FACTOR = 0.5
+
+KEY_RAILWAY_ROWS = (5, 6, 7)
+KEY_RAILWAY_COLS = (0, 4)
 
 ZOBRIST_PIECE_TABLE = {}
 ZOBRIST_PLAYER_TABLE = {}
@@ -60,7 +68,7 @@ TT_UPPER = 2
 
 
 class TranspositionTable:
-    def __init__(self, max_size=100000):
+    def __init__(self, max_size=500000):
         self._table = {}
         self._max_size = max_size
 
@@ -80,42 +88,42 @@ class TranspositionTable:
 
 
 class KillerMoves:
-    def __init__(self, max_depth=20):
+    def __init__(self, max_depth=24):
         self._moves = [[None, None] for _ in range(max_depth)]
 
     def add(self, depth, move):
+        if depth >= len(self._moves):
+            return
         if self._moves[depth][0] != move:
             self._moves[depth][1] = self._moves[depth][0]
             self._moves[depth][0] = move
 
     def get(self, depth):
+        if depth >= len(self._moves):
+            return [None, None]
         return self._moves[depth]
+
+
+STRONG_PIECE_TYPES = (
+    PieceType.BRIGADE,
+    PieceType.DIVISION,
+    PieceType.ARMY,
+    PieceType.COMMANDER,
+)
 
 
 class MilitaryChessAI:
     def __init__(self):
-        self._max_depth = 4
-        self._time_limit = 3.0
+        self._max_depth = 8
+        self._time_limit = 8.0
         self._start_time = 0
         self._timeout = False
         self._tt = TranspositionTable()
         self._killer = KillerMoves()
+        self._history = {}
         self._known_enemy_pieces = {}
         self._nodes_searched = 0
         self._cutoffs = 0
-        self._difficulty = "hard"
-
-    def set_difficulty(self, level):
-        self._difficulty = level
-        if level == "easy":
-            self._max_depth = 1
-            self._time_limit = 0.5
-        elif level == "medium":
-            self._max_depth = 2
-            self._time_limit = 1.5
-        elif level == "hard":
-            self._max_depth = 4
-            self._time_limit = 3.0
 
     def _compute_zobrist_hash(self, board):
         h = 0
@@ -128,6 +136,7 @@ class MilitaryChessAI:
 
     def _track_enemy_pieces(self, board, ai_player):
         opponent = Player.RED if ai_player == Player.BLUE else Player.BLUE
+        self._known_enemy_pieces = {}
         for r in range(BOARD_ROWS):
             for c in range(BOARD_COLS):
                 p = board.get_piece(r, c)
@@ -138,15 +147,7 @@ class MilitaryChessAI:
         return self._known_enemy_pieces.get((r, c), None)
 
     def auto_setup(self, board, player):
-        patterns = [
-            self._setup_aggressive,
-            self._setup_defensive,
-            self._setup_balanced,
-            self._setup_flank_attack,
-            self._setup_trap_master,
-        ]
-        pattern = random.choice(patterns)
-        pattern(board, player)
+        self._strategic_setup(board, player)
 
     def _clear_player_area(self, board, player):
         area_rows = list(board.get_player_area_rows(player))
@@ -155,422 +156,48 @@ class MilitaryChessAI:
                 if board.get_piece(r, c) is not None:
                     board.remove_piece(r, c)
 
-    def _get_area_info(self, board, player):
-        area_rows = sorted(list(board.get_player_area_rows(player)))
-        positions = []
-        for r in area_rows:
-            for c in range(5):
-                ct = board.get_cell_type(r, c)
-                if ct != CellType.CAMP:
-                    positions.append((r, c, ct))
-        hq_positions = [(r, c) for r, c, ct in positions if ct == CellType.HQ]
-        normal_positions = [(r, c) for r, c, ct in positions if ct != CellType.HQ]
+    def _strategic_setup(self, board, player):
+        self._clear_player_area(board, player)
+
         if player == Player.RED:
-            front_row = area_rows[0]
-            back_rows = (area_rows[-2], area_rows[-1])
-            front_rows = [area_rows[0], area_rows[1]]
-            mid_rows = [area_rows[2], area_rows[3]]
+            row_map = lambda r: r
         else:
-            front_row = area_rows[-1]
-            back_rows = (area_rows[0], area_rows[1])
-            front_rows = [area_rows[-2], area_rows[-1]]
-            mid_rows = [area_rows[-4], area_rows[-3]]
-        return hq_positions, normal_positions, front_row, back_rows, front_rows, mid_rows
+            row_map = lambda r: 12 - r
 
-    def _setup_aggressive(self, board, player):
-        self._clear_player_area(board, player)
-        hq_positions, normal_positions, front_row, back_rows, front_rows, mid_rows = self._get_area_info(board, player)
+        flag_col = random.choice([1, 3])
+        if flag_col == 1:
+            col_map = lambda c: c
+        else:
+            col_map = lambda c: 4 - c
 
-        flag_pos = random.choice(hq_positions)
-        board.place_piece(flag_pos[0], flag_pos[1], Piece(PieceType.FLAG, player))
-        other_hq = [hq for hq in hq_positions if hq != flag_pos]
+        base_layout = {
+            PieceType.FLAG: [(12, 1)],
+            PieceType.COMMANDER: [(12, 3)],
+            PieceType.MINE: [(11, 1), (12, 0), (12, 2)],
+            PieceType.BOMB: [(11, 2), (9, 1)],
+            PieceType.ARMY: [(9, 3)],
+            PieceType.DIVISION: [(8, 0), (8, 4)],
+            PieceType.BRIGADE: [(10, 0), (10, 4)],
+            PieceType.REGIMENT: [(8, 2), (10, 2)],
+            PieceType.BATTALION: [(7, 2), (11, 3)],
+            PieceType.ENGINEER: [(7, 0), (7, 4), (9, 0)],
+            PieceType.COMPANY: [(7, 1), (9, 4), (11, 0)],
+            PieceType.PLATOON: [(7, 3), (11, 4), (12, 4)],
+        }
 
-        back_positions = [(r, c) for r, c in normal_positions if r in back_rows]
-        random.shuffle(back_positions)
-        mine_count = 0
-        for r, c in back_positions:
-            if mine_count >= PIECE_COUNT[PieceType.MINE]:
-                break
-            if board.get_piece(r, c) is None:
-                board.place_piece(r, c, Piece(PieceType.MINE, player))
-                mine_count += 1
-                if (r, c) in normal_positions:
-                    normal_positions.remove((r, c))
-
-        if other_hq:
-            hq = other_hq[0]
-            if board.get_piece(hq[0], hq[1]) is None:
-                board.place_piece(hq[0], hq[1], Piece(PieceType.COMMANDER, player))
-
-        front_positions = [(r, c) for r, c in normal_positions if r in front_rows]
-        random.shuffle(front_positions)
-        strong_order = [PieceType.ARMY, PieceType.DIVISION, PieceType.BRIGADE, PieceType.REGIMENT]
-        placed_front = 0
-        for r, c in front_positions:
-            if placed_front >= len(strong_order):
-                break
-            if board.get_piece(r, c) is None:
-                board.place_piece(r, c, Piece(strong_order[placed_front], player))
-                placed_front += 1
-                if (r, c) in normal_positions:
-                    normal_positions.remove((r, c))
-
-        mid_positions = [(r, c) for r, c in normal_positions if r in mid_rows]
-        random.shuffle(mid_positions)
-        bomb_count = 0
-        for r, c in mid_positions:
-            if bomb_count >= PIECE_COUNT[PieceType.BOMB]:
-                break
-            if board.get_piece(r, c) is None:
-                board.place_piece(r, c, Piece(PieceType.BOMB, player))
-                bomb_count += 1
-                if (r, c) in normal_positions:
-                    normal_positions.remove((r, c))
-
-        remaining_pieces = []
-        for pt, count in PIECE_COUNT.items():
-            placed_in_area = 0
-            area_rows = list(board.get_player_area_rows(player))
-            for r in area_rows:
-                for c in range(5):
-                    p = board.get_piece(r, c)
-                    if p is not None and p.owner == player and p.piece_type == pt:
-                        placed_in_area += 1
-            for _ in range(count - placed_in_area):
-                remaining_pieces.append(pt)
-        random.shuffle(remaining_pieces)
-
-        available = [(r, c) for r, c in normal_positions if board.get_piece(r, c) is None]
-        random.shuffle(available)
-        for pt in remaining_pieces:
-            for r, c in available:
+        for pt, positions in base_layout.items():
+            mapped = [(row_map(r), col_map(c)) for (r, c) in positions]
+            random.shuffle(mapped)
+            for (r, c) in mapped:
                 if board.get_piece(r, c) is None:
                     board.place_piece(r, c, Piece(pt, player))
-                    available.remove((r, c))
-                    break
-
-    def _setup_defensive(self, board, player):
-        self._clear_player_area(board, player)
-        hq_positions, normal_positions, front_row, back_rows, front_rows, mid_rows = self._get_area_info(board, player)
-
-        flag_pos = random.choice(hq_positions)
-        board.place_piece(flag_pos[0], flag_pos[1], Piece(PieceType.FLAG, player))
-        other_hq = [hq for hq in hq_positions if hq != flag_pos]
-
-        back_positions = [(r, c) for r, c in normal_positions if r in back_rows]
-        random.shuffle(back_positions)
-        mine_count = 0
-        for r, c in back_positions:
-            if mine_count >= PIECE_COUNT[PieceType.MINE]:
-                break
-            if board.get_piece(r, c) is None:
-                board.place_piece(r, c, Piece(PieceType.MINE, player))
-                mine_count += 1
-                if (r, c) in normal_positions:
-                    normal_positions.remove((r, c))
-
-        if other_hq:
-            hq = other_hq[0]
-            if board.get_piece(hq[0], hq[1]) is None:
-                board.place_piece(hq[0], hq[1], Piece(PieceType.COMMANDER, player))
-
-        nearby_flag = []
-        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-            nr, nc = flag_pos[0] + dr, flag_pos[1] + dc
-            if board.is_valid_position(nr, nc) and board.get_cell_type(nr, nc) != CellType.CAMP:
-                nearby_flag.append((nr, nc))
-        random.shuffle(nearby_flag)
-        bomb_count = 0
-        for r, c in nearby_flag:
-            if bomb_count >= PIECE_COUNT[PieceType.BOMB]:
-                break
-            if board.get_piece(r, c) is None:
-                board.place_piece(r, c, Piece(PieceType.BOMB, player))
-                bomb_count += 1
-                if (r, c) in normal_positions:
-                    normal_positions.remove((r, c))
-
-        mid_positions = [(r, c) for r, c in normal_positions if r in mid_rows]
-        random.shuffle(mid_positions)
-        strong_order = [PieceType.ARMY, PieceType.DIVISION, PieceType.BRIGADE]
-        placed_strong = 0
-        for r, c in mid_positions:
-            if placed_strong >= len(strong_order):
-                break
-            if board.get_piece(r, c) is None:
-                board.place_piece(r, c, Piece(strong_order[placed_strong], player))
-                placed_strong += 1
-                if (r, c) in normal_positions:
-                    normal_positions.remove((r, c))
-
-        remaining_pieces = []
-        for pt, count in PIECE_COUNT.items():
-            placed_in_area = 0
-            area_rows = list(board.get_player_area_rows(player))
-            for r in area_rows:
-                for c in range(5):
-                    p = board.get_piece(r, c)
-                    if p is not None and p.owner == player and p.piece_type == pt:
-                        placed_in_area += 1
-            for _ in range(count - placed_in_area):
-                remaining_pieces.append(pt)
-        random.shuffle(remaining_pieces)
-
-        available = [(r, c) for r, c in normal_positions if board.get_piece(r, c) is None]
-        random.shuffle(available)
-        for pt in remaining_pieces:
-            for r, c in available:
-                if board.get_piece(r, c) is None:
-                    board.place_piece(r, c, Piece(pt, player))
-                    available.remove((r, c))
-                    break
-
-    def _setup_balanced(self, board, player):
-        self._clear_player_area(board, player)
-        hq_positions, normal_positions, front_row, back_rows, front_rows, mid_rows = self._get_area_info(board, player)
-
-        flag_pos = random.choice(hq_positions)
-        board.place_piece(flag_pos[0], flag_pos[1], Piece(PieceType.FLAG, player))
-        other_hq = [hq for hq in hq_positions if hq != flag_pos]
-
-        back_positions = [(r, c) for r, c in normal_positions if r in back_rows]
-        random.shuffle(back_positions)
-        mine_count = 0
-        for r, c in back_positions:
-            if mine_count >= PIECE_COUNT[PieceType.MINE]:
-                break
-            if board.get_piece(r, c) is None:
-                board.place_piece(r, c, Piece(PieceType.MINE, player))
-                mine_count += 1
-                if (r, c) in normal_positions:
-                    normal_positions.remove((r, c))
-
-        if other_hq:
-            hq = other_hq[0]
-            if board.get_piece(hq[0], hq[1]) is None:
-                board.place_piece(hq[0], hq[1], Piece(PieceType.COMMANDER, player))
-
-        front_positions = [(r, c) for r, c in normal_positions if r in front_rows]
-        random.shuffle(front_positions)
-        front_pieces = [PieceType.BATTALION, PieceType.REGIMENT, PieceType.PLATOON, PieceType.COMPANY]
-        random.shuffle(front_pieces)
-        placed_front = 0
-        for r, c in front_positions:
-            if placed_front >= len(front_pieces):
-                break
-            if board.get_piece(r, c) is None:
-                board.place_piece(r, c, Piece(front_pieces[placed_front], player))
-                placed_front += 1
-                if (r, c) in normal_positions:
-                    normal_positions.remove((r, c))
-
-        mid_positions = [(r, c) for r, c in normal_positions if r in mid_rows]
-        random.shuffle(mid_positions)
-        mid_pieces = [PieceType.ARMY, PieceType.DIVISION, PieceType.BRIGADE]
-        placed_mid = 0
-        for r, c in mid_positions:
-            if placed_mid >= len(mid_pieces):
-                break
-            if board.get_piece(r, c) is None:
-                board.place_piece(r, c, Piece(mid_pieces[placed_mid], player))
-                placed_mid += 1
-                if (r, c) in normal_positions:
-                    normal_positions.remove((r, c))
-
-        bomb_positions = [(r, c) for r, c in normal_positions if r != front_row]
-        random.shuffle(bomb_positions)
-        bomb_count = 0
-        for r, c in bomb_positions:
-            if bomb_count >= PIECE_COUNT[PieceType.BOMB]:
-                break
-            if board.get_piece(r, c) is None:
-                board.place_piece(r, c, Piece(PieceType.BOMB, player))
-                bomb_count += 1
-                if (r, c) in normal_positions:
-                    normal_positions.remove((r, c))
-
-        remaining_pieces = []
-        for pt, count in PIECE_COUNT.items():
-            placed_in_area = 0
-            area_rows = list(board.get_player_area_rows(player))
-            for r in area_rows:
-                for c in range(5):
-                    p = board.get_piece(r, c)
-                    if p is not None and p.owner == player and p.piece_type == pt:
-                        placed_in_area += 1
-            for _ in range(count - placed_in_area):
-                remaining_pieces.append(pt)
-        random.shuffle(remaining_pieces)
-
-        available = [(r, c) for r, c in normal_positions if board.get_piece(r, c) is None]
-        random.shuffle(available)
-        for pt in remaining_pieces:
-            for r, c in available:
-                if board.get_piece(r, c) is None:
-                    board.place_piece(r, c, Piece(pt, player))
-                    available.remove((r, c))
-                    break
-
-    def _setup_flank_attack(self, board, player):
-        self._clear_player_area(board, player)
-        hq_positions, normal_positions, front_row, back_rows, front_rows, mid_rows = self._get_area_info(board, player)
-
-        flag_pos = random.choice(hq_positions)
-        board.place_piece(flag_pos[0], flag_pos[1], Piece(PieceType.FLAG, player))
-        other_hq = [hq for hq in hq_positions if hq != flag_pos]
-
-        back_positions = [(r, c) for r, c in normal_positions if r in back_rows]
-        random.shuffle(back_positions)
-        mine_count = 0
-        for r, c in back_positions:
-            if mine_count >= PIECE_COUNT[PieceType.MINE]:
-                break
-            if board.get_piece(r, c) is None:
-                board.place_piece(r, c, Piece(PieceType.MINE, player))
-                mine_count += 1
-                if (r, c) in normal_positions:
-                    normal_positions.remove((r, c))
-
-        if other_hq:
-            hq = other_hq[0]
-            if board.get_piece(hq[0], hq[1]) is None:
-                board.place_piece(hq[0], hq[1], Piece(PieceType.COMMANDER, player))
-
-        flank_c = random.choice([0, 4])
-        flank_positions = [(r, c) for r, c in normal_positions if c == flank_c and r in front_rows]
-        if not flank_positions:
-            flank_positions = [(r, c) for r, c in normal_positions if r in front_rows]
-        random.shuffle(flank_positions)
-        strong_pieces = [PieceType.ARMY, PieceType.DIVISION, PieceType.BRIGADE]
-        for i, (r, c) in enumerate(flank_positions):
-            if i >= len(strong_pieces):
-                break
-            if board.get_piece(r, c) is None:
-                board.place_piece(r, c, Piece(strong_pieces[i], player))
-                if (r, c) in normal_positions:
-                    normal_positions.remove((r, c))
-
-        bomb_positions = [(r, c) for r, c in normal_positions if r != front_row]
-        random.shuffle(bomb_positions)
-        bomb_count = 0
-        for r, c in bomb_positions:
-            if bomb_count >= PIECE_COUNT[PieceType.BOMB]:
-                break
-            if board.get_piece(r, c) is None:
-                board.place_piece(r, c, Piece(PieceType.BOMB, player))
-                bomb_count += 1
-                if (r, c) in normal_positions:
-                    normal_positions.remove((r, c))
-
-        remaining_pieces = []
-        for pt, count in PIECE_COUNT.items():
-            placed_in_area = 0
-            area_rows = list(board.get_player_area_rows(player))
-            for r in area_rows:
-                for c in range(5):
-                    p = board.get_piece(r, c)
-                    if p is not None and p.owner == player and p.piece_type == pt:
-                        placed_in_area += 1
-            for _ in range(count - placed_in_area):
-                remaining_pieces.append(pt)
-        random.shuffle(remaining_pieces)
-
-        available = [(r, c) for r, c in normal_positions if board.get_piece(r, c) is None]
-        random.shuffle(available)
-        for pt in remaining_pieces:
-            for r, c in available:
-                if board.get_piece(r, c) is None:
-                    board.place_piece(r, c, Piece(pt, player))
-                    available.remove((r, c))
-                    break
-
-    def _setup_trap_master(self, board, player):
-        self._clear_player_area(board, player)
-        hq_positions, normal_positions, front_row, back_rows, front_rows, mid_rows = self._get_area_info(board, player)
-
-        flag_pos = random.choice(hq_positions)
-        board.place_piece(flag_pos[0], flag_pos[1], Piece(PieceType.FLAG, player))
-        other_hq = [hq for hq in hq_positions if hq != flag_pos]
-
-        back_positions = [(r, c) for r, c in normal_positions if r in back_rows]
-        random.shuffle(back_positions)
-        mine_count = 0
-        for r, c in back_positions:
-            if mine_count >= PIECE_COUNT[PieceType.MINE]:
-                break
-            if board.get_piece(r, c) is None:
-                board.place_piece(r, c, Piece(PieceType.MINE, player))
-                mine_count += 1
-                if (r, c) in normal_positions:
-                    normal_positions.remove((r, c))
-
-        if other_hq:
-            hq = other_hq[0]
-            if board.get_piece(hq[0], hq[1]) is None:
-                board.place_piece(hq[0], hq[1], Piece(PieceType.COMMANDER, player))
-
-        front_row_positions = [(r, c) for r, c in normal_positions if r == front_row]
-        random.shuffle(front_row_positions)
-        bait_positions = front_row_positions[:2]
-        trap_pieces = [PieceType.PLATOON, PieceType.COMPANY]
-        for i, (r, c) in enumerate(bait_positions):
-            if i >= len(trap_pieces):
-                break
-            if board.get_piece(r, c) is None:
-                board.place_piece(r, c, Piece(trap_pieces[i], player))
-                if (r, c) in normal_positions:
-                    normal_positions.remove((r, c))
-
-        nearby_positions = [(r, c) for r, c in normal_positions if r in front_rows and board.get_piece(r, c) is None]
-        random.shuffle(nearby_positions)
-        ambush_pieces = [PieceType.ARMY, PieceType.DIVISION]
-        for i, (r, c) in enumerate(nearby_positions):
-            if i >= len(ambush_pieces):
-                break
-            if board.get_piece(r, c) is None:
-                board.place_piece(r, c, Piece(ambush_pieces[i], player))
-                if (r, c) in normal_positions:
-                    normal_positions.remove((r, c))
-
-        bomb_positions = [(r, c) for r, c in normal_positions if r != front_row]
-        random.shuffle(bomb_positions)
-        bomb_count = 0
-        for r, c in bomb_positions:
-            if bomb_count >= PIECE_COUNT[PieceType.BOMB]:
-                break
-            if board.get_piece(r, c) is None:
-                board.place_piece(r, c, Piece(PieceType.BOMB, player))
-                bomb_count += 1
-                if (r, c) in normal_positions:
-                    normal_positions.remove((r, c))
-
-        remaining_pieces = []
-        for pt, count in PIECE_COUNT.items():
-            placed_in_area = 0
-            area_rows = list(board.get_player_area_rows(player))
-            for r in area_rows:
-                for c in range(5):
-                    p = board.get_piece(r, c)
-                    if p is not None and p.owner == player and p.piece_type == pt:
-                        placed_in_area += 1
-            for _ in range(count - placed_in_area):
-                remaining_pieces.append(pt)
-        random.shuffle(remaining_pieces)
-
-        available = [(r, c) for r, c in normal_positions if board.get_piece(r, c) is None]
-        random.shuffle(available)
-        for pt in remaining_pieces:
-            for r, c in available:
-                if board.get_piece(r, c) is None:
-                    board.place_piece(r, c, Piece(pt, player))
-                    available.remove((r, c))
-                    break
 
     def get_best_move(self, board, player):
         self._timeout = False
         self._start_time = time.time()
         self._tt.clear()
         self._killer = KillerMoves()
+        self._history = {}
         self._nodes_searched = 0
         self._cutoffs = 0
         self._known_enemy_pieces = {}
@@ -582,58 +209,78 @@ class MilitaryChessAI:
 
         opponent = Player.RED if player == Player.BLUE else Player.BLUE
 
-        scored_moves = []
+        root_moves = []
         for r, c, moves in movable:
             for to_r, to_c in moves:
                 score = self._evaluate_move_quick(board, player, opponent, r, c, to_r, to_c)
-                scored_moves.append((score, r, c, to_r, to_c))
-
-        scored_moves.sort(key=lambda x: x[0], reverse=True)
+                root_moves.append((score, r, c, to_r, to_c))
 
         best_move = None
         best_score = -float("inf")
+        pv_move = None
 
         for depth in range(1, self._max_depth + 1):
             if self._timeout:
                 break
+
+            ordered = list(root_moves)
+            if pv_move is not None:
+                for i in range(len(ordered)):
+                    s, r, c, to_r, to_c = ordered[i]
+                    if (r, c, to_r, to_c) == pv_move:
+                        ordered[i] = (s + 200000, r, c, to_r, to_c)
+                        break
+            ordered.sort(key=lambda x: x[0], reverse=True)
 
             current_best = None
             current_best_score = -float("inf")
             alpha = -float("inf")
             beta = float("inf")
 
-            limit = min(len(scored_moves), 30)
+            limit = min(len(ordered), 30)
             for i in range(limit):
                 if self._timeout:
                     break
-                _, r, c, to_r, to_c = scored_moves[i]
+                _, r, c, to_r, to_c = ordered[i]
+                move = (r, c, to_r, to_c)
                 board_copy = board.copy()
                 self._simulate_move(board_copy, r, c, to_r, to_c)
-                score = self._minimax(board_copy, opponent, depth - 1, alpha, beta, False, player)
+
+                if i == 0:
+                    score = self._minimax(board_copy, opponent, depth - 1, alpha, beta, False, player)
+                else:
+                    score = self._minimax(board_copy, opponent, depth - 1, alpha, alpha + 1, False, player)
+                    if alpha < score < beta:
+                        score = self._minimax(board_copy, opponent, depth - 1, alpha, beta, False, player)
 
                 if self._timeout:
                     break
 
                 if score > current_best_score:
                     current_best_score = score
-                    current_best = (r, c, to_r, to_c)
+                    current_best = move
                 if score > alpha:
                     alpha = score
 
             if not self._timeout and current_best is not None:
                 best_move = current_best
                 best_score = current_best_score
+                pv_move = current_best
 
-        if best_move is None and scored_moves:
-            best_move = (scored_moves[0][1], scored_moves[0][2], scored_moves[0][3], scored_moves[0][4])
+        if best_move is None:
+            for s, r, c, to_r, to_c in root_moves:
+                best_move = (r, c, to_r, to_c)
+                break
 
         return best_move
 
-    def _minimax(self, board, current_player, depth, alpha, beta, maximizing, ai_player):
+    def _minimax(self, board, current_player, depth, alpha, beta, maximizing, ai_player, tt_move=None):
         self._nodes_searched += 1
 
-        if self._timeout or time.time() - self._start_time > self._time_limit:
-            self._timeout = True
+        if self._nodes_searched % 2048 == 0:
+            if time.time() - self._start_time > self._time_limit:
+                self._timeout = True
+        if self._timeout:
             return self._evaluate(board, ai_player)
 
         hash_key = self._compute_zobrist_hash(board)
@@ -662,47 +309,77 @@ class MilitaryChessAI:
 
         opponent = Player.RED if current_player == Player.BLUE else Player.BLUE
 
-        if self._try_null_move(board, current_player, depth, alpha, beta, maximizing, ai_player):
-            return beta
+        if depth >= 3 and maximizing:
+            if self._try_null_move(board, current_player, depth, alpha, beta, maximizing, ai_player):
+                return beta
 
         all_moves = []
         for r, c, moves in movable:
             for to_r, to_c in moves:
-                move_score = self._order_move_score(board, current_player, opponent, r, c, to_r, to_c, depth)
+                move_score = self._order_move_score(board, current_player, opponent, r, c, to_r, to_c, depth, tt_move)
                 all_moves.append((move_score, r, c, to_r, to_c))
 
-        all_moves.sort(key=lambda x: x[0], reverse=maximizing)
+        all_moves.sort(key=lambda x: x[0], reverse=True)
 
-        limit = min(len(all_moves), 20)
+        limit = min(len(all_moves), 24)
         best_value = -float("inf") if maximizing else float("inf")
         best_move = None
 
+        LMR_THRESHOLD = 6
         for i in range(limit):
             _, r, c, to_r, to_c = all_moves[i]
+            move = (r, c, to_r, to_c)
+            target = board.get_piece(to_r, to_c)
+            is_capture = target is not None
+            killers = self._killer.get(depth)
+            is_killer = (killers[0] == move or killers[1] == move)
+            is_tt_move = (tt_move is not None and move == tt_move)
+
             board_copy = board.copy()
             self._simulate_move(board_copy, r, c, to_r, to_c)
-            child = self._minimax(board_copy, opponent, depth - 1, alpha, beta, not maximizing, ai_player)
+
+            new_depth = depth - 1
+            reduced = False
+            if i >= LMR_THRESHOLD and depth >= 3 and not is_capture and not is_killer and not is_tt_move:
+                new_depth = depth - 2
+                reduced = True
+
+            if i == 0:
+                child = self._minimax(board_copy, opponent, new_depth, alpha, beta, not maximizing, ai_player)
+            else:
+                if maximizing:
+                    child = self._minimax(board_copy, opponent, new_depth, alpha, alpha + 1, not maximizing, ai_player)
+                    if alpha < child < beta:
+                        child = self._minimax(board_copy, opponent, depth - 1, alpha, beta, not maximizing, ai_player)
+                else:
+                    child = self._minimax(board_copy, opponent, new_depth, beta - 1, beta, not maximizing, ai_player)
+                    if alpha < child < beta:
+                        child = self._minimax(board_copy, opponent, depth - 1, alpha, beta, not maximizing, ai_player)
+
+            if self._timeout:
+                break
 
             if maximizing:
                 if child > best_value:
                     best_value = child
-                    best_move = (r, c, to_r, to_c)
+                    best_move = move
                 if best_value > alpha:
                     alpha = best_value
             else:
                 if child < best_value:
                     best_value = child
-                    best_move = (r, c, to_r, to_c)
+                    best_move = move
                 if best_value < beta:
                     beta = best_value
 
             if alpha >= beta:
                 self._cutoffs += 1
-                if best_move is not None:
+                if not is_capture and best_move is not None:
                     self._killer.add(depth, best_move)
+                    self._history[best_move] = self._history.get(best_move, 0) + depth * depth
                 break
 
-        if best_move is not None:
+        if best_move is not None and not self._timeout:
             if maximizing:
                 flag = TT_LOWER if best_value >= beta else TT_EXACT
             else:
@@ -712,9 +389,7 @@ class MilitaryChessAI:
         return best_value
 
     def _try_null_move(self, board, current_player, depth, alpha, beta, maximizing, ai_player):
-        if depth < 3:
-            return False
-        if not maximizing:
+        if depth < 3 or not maximizing:
             return False
         total_pieces = 0
         for r in range(BOARD_ROWS):
@@ -778,25 +453,43 @@ class MilitaryChessAI:
         captures = []
         movable = board.get_movable_pieces(player)
         for r, c, moves in movable:
+            attacker = board.get_piece(r, c)
+            atk_val = PIECE_VALUES.get(attacker.piece_type, 0) if attacker else 0
             for to_r, to_c in moves:
                 target = board.get_piece(to_r, to_c)
                 if target is not None and target.owner == opponent:
-                    score = PIECE_VALUES.get(target.piece_type, 0)
                     if target.piece_type == PieceType.FLAG:
                         score = 1000000
+                    else:
+                        def_val = PIECE_VALUES.get(target.piece_type, 0)
+                        score = def_val * 10 - atk_val
                     captures.append((score, r, c, to_r, to_c))
         return captures
 
-    def _order_move_score(self, board, player, opponent, from_r, from_c, to_r, to_c, depth):
+    def _order_move_score(self, board, player, opponent, from_r, from_c, to_r, to_c, depth, tt_move=None):
         move = (from_r, from_c, to_r, to_c)
+        if tt_move is not None and move == tt_move:
+            return 200000
         killers = self._killer.get(depth)
         if killers[0] == move:
             return 100000
         if killers[1] == move:
             return 50000
 
-        score = self._evaluate_move_quick(board, player, opponent, from_r, from_c, to_r, to_c)
-        return score
+        target = board.get_piece(to_r, to_c)
+        if target is not None and target.owner == opponent:
+            attacker = board.get_piece(from_r, from_c)
+            if target.piece_type == PieceType.FLAG:
+                return 150000
+            mvv = PIECE_VALUES.get(target.piece_type, 0)
+            lva = PIECE_VALUES.get(attacker.piece_type, 0) if attacker else 0
+            return 40000 + mvv * 10 - lva
+
+        hist = self._history.get(move, 0)
+        if hist > 0:
+            return 30000 + min(hist, 20000)
+
+        return self._evaluate_move_quick(board, player, opponent, from_r, from_c, to_r, to_c)
 
     def _simulate_move(self, board, from_r, from_c, to_r, to_c):
         piece = board.get_piece(from_r, from_c)
@@ -813,6 +506,81 @@ class MilitaryChessAI:
                 board.remove_piece(to_r, to_c)
         else:
             board.move_piece(from_r, from_c, to_r, to_c)
+
+    def _game_phase(self, total_pieces):
+        if total_pieces > 30:
+            return "opening"
+        elif total_pieces > 15:
+            return "midgame"
+        else:
+            return "endgame"
+
+    def _threat_score(self, board, ai_player):
+        opponent = Player.RED if ai_player == Player.BLUE else Player.BLUE
+        score = 0
+        for r in range(BOARD_ROWS):
+            for c in range(BOARD_COLS):
+                p = board.get_piece(r, c)
+                if p is None:
+                    continue
+                if p.piece_type in (PieceType.FLAG, PieceType.MINE):
+                    continue
+                ct = board.get_cell_type(r, c)
+                if ct == CellType.CAMP:
+                    continue
+                val = PIECE_VALUES.get(p.piece_type, 0)
+                threatened = False
+                can_attack = False
+                for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    nr, nc = r + dr, c + dc
+                    if not board.is_valid_position(nr, nc):
+                        continue
+                    nct = board.get_cell_type(nr, nc)
+                    if nct == CellType.CAMP:
+                        continue
+                    ep = board.get_piece(nr, nc)
+                    if ep is None:
+                        continue
+                    if ep.owner == opponent and p.owner == ai_player:
+                        if board.resolve_battle(ep, p) == "attacker":
+                            threatened = True
+                    elif ep.owner == ai_player and p.owner == opponent:
+                        if board.resolve_battle(ep, p) == "attacker":
+                            can_attack = True
+                if p.owner == ai_player:
+                    if threatened:
+                        score -= int(val * THREAT_FACTOR)
+                else:
+                    if can_attack:
+                        score += int(val * THREAT_FACTOR)
+        return score
+
+    def _flag_attack_score(self, board, ai_player):
+        opponent = Player.RED if ai_player == Player.BLUE else Player.BLUE
+        flag_pos = None
+        for r in range(BOARD_ROWS):
+            for c in range(BOARD_COLS):
+                p = board.get_piece(r, c)
+                if p is not None and p.owner == opponent and p.piece_type == PieceType.FLAG:
+                    flag_pos = (r, c)
+                    break
+            if flag_pos:
+                break
+        if flag_pos is None:
+            return 0
+        fr, fc = flag_pos
+        score = 0
+        for r in range(BOARD_ROWS):
+            for c in range(BOARD_COLS):
+                p = board.get_piece(r, c)
+                if p is None or p.owner != ai_player:
+                    continue
+                if p.piece_type not in (PieceType.COMMANDER, PieceType.ARMY, PieceType.DIVISION, PieceType.BRIGADE):
+                    continue
+                dist = abs(r - fr) + abs(c - fc)
+                if dist <= 4:
+                    score += FLAG_ATTACK_BONUS * (5 - dist)
+        return score
 
     def _evaluate(self, board, ai_player):
         opponent = Player.RED if ai_player == Player.BLUE else Player.BLUE
@@ -839,8 +607,12 @@ class MilitaryChessAI:
         positional_score = 0
         my_commander_alive = False
         opp_commander_alive = False
+        my_commander_exposed = False
+        opp_commander_exposed = False
         my_engineer_count = 0
         opp_engineer_count = 0
+        opp_mine_count = 0
+        rail_control = 0
 
         for r in range(BOARD_ROWS):
             for c in range(BOARD_COLS):
@@ -849,6 +621,7 @@ class MilitaryChessAI:
                     continue
                 total_pieces += 1
                 val = PIECE_VALUES.get(p.piece_type, 0)
+                ct = board.get_cell_type(r, c)
                 if p.owner == ai_player:
                     my_piece_count += 1
                     my_value += val
@@ -857,6 +630,8 @@ class MilitaryChessAI:
                         my_flag_pos = (r, c)
                     elif p.piece_type == PieceType.COMMANDER:
                         my_commander_alive = True
+                        if ct != CellType.HQ:
+                            my_commander_exposed = True
                     elif p.piece_type == PieceType.ENGINEER:
                         my_engineer_count += 1
                     else:
@@ -865,9 +640,13 @@ class MilitaryChessAI:
                         else:
                             advance_score += (r - my_back_row) * ADVANCE_WEIGHT
                     positional_score += pos_table.get((r, c), 0)
-                    ct = board.get_cell_type(r, c)
                     if ct == CellType.CAMP:
                         my_value += CAMP_BONUS
+                        if p.piece_type in STRONG_PIECE_TYPES:
+                            my_value += CAMP_STRONG_BONUS
+                    if ct == CellType.RAILWAY:
+                        if r in KEY_RAILWAY_ROWS or c in KEY_RAILWAY_COLS:
+                            rail_control += RAIL_CONTROL_BONUS
                     if p.piece_type == PieceType.ENGINEER:
                         for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
                             nr, nc = r + dr, c + dc
@@ -883,9 +662,12 @@ class MilitaryChessAI:
                         opp_flag_pos = (r, c)
                     elif p.piece_type == PieceType.COMMANDER:
                         opp_commander_alive = True
+                        if ct != CellType.HQ:
+                            opp_commander_exposed = True
                     elif p.piece_type == PieceType.ENGINEER:
                         opp_engineer_count += 1
-                    ct = board.get_cell_type(r, c)
+                    elif p.piece_type == PieceType.MINE:
+                        opp_mine_count += 1
                     if ct == CellType.CAMP:
                         opp_value += CAMP_BONUS
 
@@ -916,16 +698,30 @@ class MilitaryChessAI:
             commander_score += COMMANDER_SAFETY_BONUS * 2
         elif not my_commander_alive and opp_commander_alive:
             commander_score -= COMMANDER_SAFETY_BONUS * 2
+        if my_commander_exposed:
+            commander_score -= COMMANDER_EXPOSED_PENALTY
+        if opp_commander_exposed:
+            commander_score += COMMANDER_EXPOSED_PENALTY
 
         engineer_score = (my_engineer_count - opp_engineer_count) * 30
 
-        total_score = (my_value - opp_value) + mobility_score + advance_score + positional_score + commander_score + engineer_score
+        threat_score = self._threat_score(board, ai_player)
+        flag_attack_score = self._flag_attack_score(board, ai_player)
 
-        if total_pieces < 20:
+        total_score = (my_value - opp_value) + mobility_score + advance_score + positional_score
+        total_score += commander_score + engineer_score + threat_score + flag_attack_score + rail_control
+
+        phase = self._game_phase(total_pieces)
+        if phase == "endgame":
+            if my_engineer_count > 0 and opp_mine_count > 0:
+                total_score += my_engineer_count * ENGINEER_ENDGAME_VALUE
             if my_commander_alive and opp_commander_alive:
                 total_score += my_value * 0.05
             if my_engineer_count > opp_engineer_count:
                 total_score += (my_engineer_count - opp_engineer_count) * 50
+        elif phase == "midgame":
+            if my_commander_alive and opp_commander_alive:
+                total_score += my_value * 0.03
 
         return total_score
 
