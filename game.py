@@ -188,14 +188,6 @@ class MilitaryChessGame:
         )
         self.confirm_button.visible = True
 
-        self.auto_setup_button = self.renderer.add_button(
-            pygame.Rect(margin_left + btn_w * 3 + 24, y_top, btn_w, btn_h),
-            "自动布阵",
-            font,
-            self._auto_setup_self
-        )
-        self.auto_setup_button.visible = True
-
     def _restart_game(self):
         if self.client:
             if self.game_state.is_game_over:
@@ -289,42 +281,6 @@ class MilitaryChessGame:
                 if p is not None and p.owner == self.my_player:
                     pieces_data.append((r, c, int(p.piece_type), int(p.owner)))
         self.client.send_setup_sync(pieces_data)
-
-    def _auto_setup_self(self):
-        if self.game_state.phase != "setup":
-            return
-        if self.player_type == 0 and self.game_state.red_setup_done and self.game_state.blue_setup_done:
-            return
-        if self.player_type != 0 and self.my_player is not None:
-            if self.my_player == Player.RED and self.game_state.red_setup_done:
-                return
-            if self.my_player == Player.BLUE and self.game_state.blue_setup_done:
-                return
-        if self._ai is None:
-            self._ai = MilitaryChessAI()
-        if self.player_type == 0:
-            self._clear_player_pieces(Player.RED)
-            self._clear_player_pieces(Player.BLUE)
-            self._ai.auto_setup(self.game_state.board, Player.RED)
-            self._ai.auto_setup(self.game_state.board, Player.BLUE)
-        else:
-            if self.my_player is None:
-                return
-            self._clear_player_pieces(self.my_player)
-            self._ai.auto_setup(self.game_state.board, self.my_player)
-        self._selected_piece_type = None
-        self._selected_piece_player = None
-        self._selected_cell = None
-        self.renderer.set_selected(None)
-        self.renderer.set_valid_moves([])
-
-    def _clear_player_pieces(self, player):
-        area_rows = list(self.game_state.board.get_player_area_rows(player))
-        for r in area_rows:
-            for c in range(5):
-                p = self.game_state.board.get_piece(r, c)
-                if p is not None and p.owner == player:
-                    self.game_state.board.remove_piece(r, c)
 
     def _is_ai_turn(self):
         if self.game_state.phase != "playing":
@@ -520,8 +476,6 @@ class MilitaryChessGame:
                 self._cleanup()
                 pygame.quit()
                 sys.exit(0)
-            elif event.type == pygame.KEYDOWN:
-                self._handle_key(event)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if not self._process_button_event(event, event.pos):
                     self._handle_click(event.pos)
@@ -671,20 +625,6 @@ class MilitaryChessGame:
                         self._selected_cell = None
                         self.renderer.set_selected(None)
                         self.renderer.set_valid_moves([])
-
-    def _handle_key(self, event):
-        if event.key == pygame.K_ESCAPE:
-            if self.game_state.is_game_over:
-                self._quit_to_menu()
-            else:
-                dialog = Dialog(self.screen, "确定要返回菜单吗？", "提示", [("确定", True), ("取消", False)])
-                result = dialog.show()
-                if result:
-                    self._quit_to_menu()
-        elif event.key == pygame.K_r and self.player_type not in (1, 2):
-            self._restart_game()
-        elif event.key == pygame.K_RETURN and self.game_state.phase == "setup":
-            self._confirm_setup()
 
     def _update(self):
         if self.client:
@@ -868,7 +808,6 @@ class MilitaryChessGame:
             self.exit_button.visible = False
             self.reset_button.visible = False
             self.confirm_button.visible = False
-            self.auto_setup_button.visible = False
             self.restart_button.visible = True
             self.menu_button.visible = True
         else:
@@ -881,10 +820,8 @@ class MilitaryChessGame:
                 self.reset_button.visible = (self.game_state.phase == "playing")
             if self.game_state.phase == "setup":
                 self.confirm_button.visible = True
-                self.auto_setup_button.visible = True
             else:
                 self.confirm_button.visible = False
-                self.auto_setup_button.visible = False
             self.restart_button.visible = False
             self.menu_button.visible = False
 

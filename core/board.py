@@ -142,7 +142,8 @@ class Board:
     def place_piece(self, row, col, piece):
         if not (0 <= row < BOARD_ROWS and 0 <= col < BOARD_COLS):
             return False
-        if self.cell_types[row][col] == CellType.MOUNTAIN:
+        ct = self.cell_types[row][col]
+        if ct in (CellType.MOUNTAIN, CellType.CAMP):
             return False
         if self.grid[row][col] is not None:
             return False

@@ -17,7 +17,6 @@ class InputBox:
         self.cursor_pos = 0
         self.select_start = None
         self.select_end = None
-        self._undo_stack = []
 
     def activate(self):
         self.active = True
@@ -35,33 +34,6 @@ class InputBox:
             return min(self.select_start, self.select_end), max(self.select_start, self.select_end)
         return None
 
-    def _save_undo(self):
-        self._undo_stack.append(self.text)
-        if len(self._undo_stack) > 50:
-            self._undo_stack.pop(0)
-
-    def _get_clipboard(self):
-        try:
-            import pygame.scrap
-            if not pygame.scrap.get_init():
-                pygame.scrap.init()
-            if pygame.scrap.get_types():
-                data = pygame.scrap.get("text/plain")
-                if data is not None:
-                    return data.decode("utf-8", errors="ignore")
-        except Exception:
-            pass
-        return ""
-
-    def _set_clipboard(self, text):
-        try:
-            import pygame.scrap
-            if not pygame.scrap.get_init():
-                pygame.scrap.init()
-            pygame.scrap.put("text/plain", text.encode("utf-8"))
-        except Exception:
-            pass
-
     def handle_event(self, event):
         if not self.active:
             return None
@@ -75,27 +47,23 @@ class InputBox:
             elif event.key == pygame.K_BACKSPACE:
                 sel = self._get_selection()
                 if sel:
-                    self._save_undo()
                     s, e = sel
                     self.text = self.text[:s] + self.text[e:]
                     self.cursor_pos = s
                     self.select_start = None
                     self.select_end = None
                 elif self.cursor_pos > 0:
-                    self._save_undo()
                     self.text = self.text[:self.cursor_pos - 1] + self.text[self.cursor_pos:]
                     self.cursor_pos -= 1
             elif event.key == pygame.K_DELETE:
                 sel = self._get_selection()
                 if sel:
-                    self._save_undo()
                     s, e = sel
                     self.text = self.text[:s] + self.text[e:]
                     self.cursor_pos = s
                     self.select_start = None
                     self.select_end = None
                 elif self.cursor_pos < len(self.text):
-                    self._save_undo()
                     self.text = self.text[:self.cursor_pos] + self.text[self.cursor_pos + 1:]
             elif event.key == pygame.K_LEFT:
                 if self.select_start is not None and self.select_end is not None:
@@ -119,50 +87,9 @@ class InputBox:
                 self.cursor_pos = len(self.text)
                 self.select_start = None
                 self.select_end = None
-            elif event.key == pygame.K_a and (event.mod & pygame.KMOD_CTRL):
-                if self.text:
-                    self.select_start = 0
-                    self.select_end = len(self.text)
-                    self.cursor_pos = 0
-            elif event.key == pygame.K_c and (event.mod & pygame.KMOD_CTRL):
-                sel = self._get_selection()
-                if sel:
-                    s, e = sel
-                    self._set_clipboard(self.text[s:e])
-            elif event.key == pygame.K_v and (event.mod & pygame.KMOD_CTRL):
-                clip_text = self._get_clipboard()
-                if clip_text:
-                    sel = self._get_selection()
-                    self._save_undo()
-                    if sel:
-                        s, e = sel
-                        self.text = self.text[:s] + clip_text + self.text[e:]
-                        self.cursor_pos = s + len(clip_text)
-                        self.select_start = None
-                        self.select_end = None
-                    else:
-                        self.text = self.text[:self.cursor_pos] + clip_text + self.text[self.cursor_pos:]
-                        self.cursor_pos += len(clip_text)
-            elif event.key == pygame.K_x and (event.mod & pygame.KMOD_CTRL):
-                sel = self._get_selection()
-                if sel:
-                    s, e = sel
-                    self._set_clipboard(self.text[s:e])
-                    self._save_undo()
-                    self.text = self.text[:s] + self.text[e:]
-                    self.cursor_pos = s
-                    self.select_start = None
-                    self.select_end = None
-            elif event.key == pygame.K_z and (event.mod & pygame.KMOD_CTRL):
-                if self._undo_stack:
-                    self.text = self._undo_stack.pop()
-                    self.cursor_pos = len(self.text)
-                    self.select_start = None
-                    self.select_end = None
             else:
                 if event.unicode and event.unicode.isprintable():
                     sel = self._get_selection()
-                    self._save_undo()
                     if sel:
                         s, e = sel
                         new_text = self.text[:s] + event.unicode + self.text[e:]
@@ -420,7 +347,7 @@ class Menu:
 
     def _start_game(self, is_server, player):
         if is_server and not is_admin():
-            if elevate_and_restart(extra_args=["--auto-create-room"]):
+            if elevate_and_restart():
                 pygame.quit()
                 sys.exit(0)
             return

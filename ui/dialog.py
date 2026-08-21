@@ -117,17 +117,5 @@ class Dialog:
                             self.result = value
                             waiting = False
                             break
-                elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_RETURN:
-                        self.result = self.button_rects[0][2]
-                        waiting = False
-                        break
-                    elif event.key == pygame.K_ESCAPE:
-                        if len(self.button_rects) >= 2:
-                            self.result = self.button_rects[-1][2]
-                        else:
-                            self.result = False
-                        waiting = False
-                        break
             if waiting:
                 pygame.time.wait(30)

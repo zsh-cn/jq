@@ -54,19 +54,9 @@ def main():
         from game import MilitaryChessGame
         from ui.menu import Menu
 
-        auto_create = "--auto-create-room" in sys.argv
-
         pygame.init()
         saved_window_size = None
         menu = None
-
-        if auto_create:
-            game = MilitaryChessGame(is_server=True, player=1, host="0.0.0.0", port=9000,
-                             window_size=saved_window_size)
-            return_code = game.run()
-            if return_code == "quit":
-                return
-            saved_window_size = game.screen.get_size()
 
         while True:
             if menu is None:
